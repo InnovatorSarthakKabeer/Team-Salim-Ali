@@ -1,0 +1,24 @@
+#include <ESP32Servo.h>
+
+int xPin = 32;
+
+Servo servo1;
+
+
+void setup() {
+  Serial.begin(115200);
+
+  servo1.attach(18);
+  servo1.write(90);
+}
+
+void loop() {
+  int x = analogRead(xPin);
+
+  int angle = map(x, 0, 4095, 0, 180);
+
+  servo1.write(angle);
+  Serial.println(angle);
+
+  delay(20);
+}
