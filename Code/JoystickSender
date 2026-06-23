@@ -1,0 +1,106 @@
+/*
+ * Hexapod Joystick — ESP-NOW SENDER
+ *
+ * Reads analog joystick (X, Y) + button, sends to hexapod receiver.
+ *
+ * Wiring:
+ *   VRx  -> GPIO 32
+ *   VRy  -> GPIO 33
+ *   SW   -> GPIO 25 (button, active LOW, internal pull-up enabled)
+ *   VCC  -> 3.3V
+ *   GND  -> GND
+ *
+ * Target receiver MAC: E0:8C:FE:B6:CA:34  (your hexapod ESP32)
+ */
+
+#include <WiFi.h>
+#include <esp_now.h>
+#include <esp_wifi.h>
+
+// ====================== PINS ======================
+const int X_PIN  = 32;
+const int Y_PIN  = 33;
+const int SW_PIN = 25;   // joystick button (active LOW)
+
+// ====================== TARGET MAC ======================
+// This is your hexapod receiver's MAC address
+uint8_t receiverMAC[] = { 0xE0, 0x8C, 0xFE, 0xB6, 0xCA, 0x34 };
+
+// ====================== DATA STRUCT ======================
+// Must match the struct in the receiver (FINALhexapod.ino)
+struct JoystickData {
+  int  x;
+  int  y;
+  bool button;
+};
+
+JoystickData joyData;
+
+bool connected = false;   // tracks whether hexapod is receiving
+
+// ====================== SEND CALLBACK ======================
+void onSent(const wifi_tx_info_t *info, esp_now_send_status_t status) {
+  if (status == ESP_NOW_SEND_SUCCESS && !connected) {
+    connected = true;
+    Serial.println("Connected to Hexapod!");
+  } else if (status != ESP_NOW_SEND_SUCCESS && connected) {
+    connected = false;
+    Serial.println("Hexapod disconnected!");
+  }
+}
+
+// ====================== SETUP ======================
+void setup() {
+  Serial.begin(115200);
+  delay(300);
+
+  pinMode(SW_PIN, INPUT_PULLUP);   // button pulls to GND when pressed
+
+  // ESP-NOW init
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect();
+
+  // Lock to channel 1 — must match receiver
+  esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE);
+
+  Serial.print("Sender MAC: ");
+  Serial.println(WiFi.macAddress());
+
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("ESP-NOW Init FAILED — reboot.");
+    return;
+  }
+
+  esp_now_register_send_cb(onSent);
+
+  // Register the hexapod as a peer
+  esp_now_peer_info_t peerInfo = {};
+  memcpy(peerInfo.peer_addr, receiverMAC, 6);
+  peerInfo.channel = 1;    // must match receiver channel
+  peerInfo.encrypt = false;
+
+  if (esp_now_add_peer(&peerInfo) != ESP_OK) {
+    Serial.println("Failed to add peer — check MAC address.");
+    return;
+  }
+
+  Serial.println("Joystick sender ready. Targeting hexapod: E0:8C:FE:B6:CA:34");
+}
+
+// ====================== LOOP ======================
+void loop() {
+  // Read joystick (0-4095 range)
+  joyData.x      = analogRead(X_PIN);
+  joyData.y      = 4095 - analogRead(Y_PIN);    // invert Y: push forward = high value
+  joyData.button = (digitalRead(SW_PIN) == LOW); // true when button pressed
+
+  // Debug print
+  Serial.printf("X: %4d  Y: %4d  SW: %d\n", joyData.x, joyData.y, joyData.button);
+
+  // Send to hexapod via ESP-NOW
+  esp_now_send(receiverMAC, (uint8_t*)&joyData, sizeof(joyData));
+
+  // 150ms interval = ~6 packets/sec
+  // Receiver uses edge detection for button, so no debounce needed here
+  delay(150);
+}
